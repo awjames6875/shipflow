@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(claude mcp list:*)",
+      "Bash(curl -s -X PUT \"https://awjames.app.n8n.cloud/api/v1/workflows/1soHkK4F9TlAQaZw\" -H \"X-N8N-API-KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2YzY5OGEzYy0yYmM0LTRkNDYtYTZiZS1iNWM5MDlhOWM0OGYiLCJpc3MiOiJuOG4iLCJhdWQiOiJwdWJsaWMtYXBpIiwiaWF0IjoxNzY2MDMzOTU1LCJleHAiOjE3Njg1NDMyMDB9.PP0y-hz36AqmZFd1j8_wXWczQYplDvLtpi51qJdmC4k\" -H \"Content-Type: application/json\" -d @\"c:\\\\Projects\\\\shipflow-app\\\\n8n-workflows\\\\shipflow-fixed.json\")",
+      "Bash(curl:*)",
+      "Bash(cat:*)",
+      "Bash(python:*)",
+      "Bash(python3:*)",
+      "Bash(dir \"c:\\\\Projects\\\\shipflow-app\\\\n8n-workflows\")",
+      "Bash(python -m json.tool:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nInitial commit: ShipFlow viral video pipeline\n\n- Python FastAPI backend with HeyGen, Blotato, Perplexity, OpenAI integrations\n- Next.js 14 frontend dashboard\n- Full workflow: research trending news -> write script -> generate AI video -> post to 6 platforms\n- Self-improving optimizer with A/B testing\n- Docker support\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git branch:*)",
+      "Bash(git push:*)"
+    ]
+  }
+}

@@ -1,0 +1,220 @@
+{
+  "name": "ShipFlow - FULL PIPELINE",
+  "nodes": [
+    {
+      "parameters": {"httpMethod": "POST", "path": "shipflow/run", "responseMode": "responseNode", "options": {}},
+      "id": "webhook-main",
+      "name": "Start",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "shipflow-run"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.perplexity.ai/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {"parameters": [{"name": "Authorization", "value": "Bearer YOUR_PERPLEXITY_API_KEY"}, {"name": "Content-Type", "value": "application/json"}]},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"model\": \"sonar-pro\", \"messages\": [{\"role\": \"user\", \"content\": \"Research the top 10 trending news stories in \" + ($json.body.industry || \"real estate\") + \" from the last 24 hours. For each story provide: headline, why trending, key stats, viral potential 1-10.\"}], \"search_recency_filter\": \"day\"}",
+        "options": {}
+      },
+      "id": "step1-research",
+      "name": "1. Research News",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [250, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.perplexity.ai/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {"parameters": [{"name": "Authorization", "value": "Bearer YOUR_PERPLEXITY_API_KEY"}, {"name": "Content-Type", "value": "application/json"}]},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"model\": \"sonar-pro\", \"messages\": [{\"role\": \"user\", \"content\": \"From this news report, select the SINGLE most viral story. Research it deeply: full details, statistics, emotional hooks, controversy. Report: \" + $json.choices[0].message.content}], \"search_recency_filter\": \"day\"}",
+        "options": {}
+      },
+      "id": "step2-select",
+      "name": "2. Select Story",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {"parameters": [{"name": "Authorization", "value": "Bearer YOUR_OPENAI_API_KEY"}, {"name": "Content-Type", "value": "application/json"}]},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"model\": \"gpt-4o\", \"messages\": [{\"role\": \"system\", \"content\": \"You are a viral video scriptwriter. Write 30-second scripts at 6th grade reading level. Create curiosity in first sentence. End with: Hit follow to stay up to date!\"}, {\"role\": \"user\", \"content\": \"Write a video script for this story. Return JSON with: script, caption (with hashtags), title. Story: \" + $json.choices[0].message.content}], \"response_format\": {\"type\": \"json_object\"}}",
+        "options": {}
+      },
+      "id": "step3-script",
+      "name": "3. Write Script",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [750, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const content = $input.first().json.choices[0].message.content;\nlet parsed;\ntry {\n  parsed = JSON.parse(content);\n} catch(e) {\n  parsed = { script: content, caption: 'Check this out!', title: 'Breaking News' };\n}\nreturn [{ json: { script: parsed.script, caption: parsed.caption, title: parsed.title, industry: $('Start').item.json.body.industry } }];"
+      },
+      "id": "parse-script",
+      "name": "Parse Script",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.heygen.com/v2/video/generate",
+        "sendHeaders": true,
+        "headerParameters": {"parameters": [{"name": "X-Api-Key", "value": "sk_V2_hgu_kcWFcXGWWja_pBX4MbRCxxyS7DHusruaY50fcdSBq8zu"}, {"name": "Content-Type", "value": "application/json"}]},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"video_inputs\": [{\n    \"character\": {\n      \"type\": \"avatar\",\n      \"avatar_id\": \"6749d17784bf4e2fa243e19965b786b0\",\n      \"avatar_style\": \"normal\"\n    },\n    \"voice\": {\n      \"type\": \"text\",\n      \"input_text\": {{ JSON.stringify($json.script) }},\n      \"voice_id\": \"7161e1653af140edadafa1a870ed328f\",\n      \"speed\": 1.1\n    }\n  }],\n  \"dimension\": {\"width\": 720, \"height\": 1280},\n  \"aspect_ratio\": \"9:16\",\n  \"caption\": true\n}",
+        "options": {}
+      },
+      "id": "step4-heygen",
+      "name": "4. Create Video",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1250, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const videoId = $input.first().json.data?.video_id;\nif (!videoId) {\n  throw new Error('Failed to create video: ' + JSON.stringify($input.first().json));\n}\nreturn [{ json: { video_id: videoId, title: $('Parse Script').item.json.title, caption: $('Parse Script').item.json.caption } }];"
+      },
+      "id": "extract-video-id",
+      "name": "Get Video ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1500, 0]
+    },
+    {
+      "parameters": {"amount": 30},
+      "id": "wait-30s",
+      "name": "Wait 30s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1750, 0],
+      "webhookId": "shipflow-wait"
+    },
+    {
+      "parameters": {
+        "url": "=https://api.heygen.com/v1/video_status.get?video_id={{ $('Get Video ID').item.json.video_id }}",
+        "sendHeaders": true,
+        "headerParameters": {"parameters": [{"name": "X-Api-Key", "value": "sk_V2_hgu_kcWFcXGWWja_pBX4MbRCxxyS7DHusruaY50fcdSBq8zu"}]},
+        "options": {}
+      },
+      "id": "step5-poll",
+      "name": "5. Poll Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2000, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json.data;\nconst status = data?.status;\nconst videoUrl = data?.video_url;\nconst videoId = data?.video_id;\n\nif (status === 'completed' && videoUrl) {\n  return [{ json: { done: true, video_url: videoUrl, video_id: videoId, title: $('Get Video ID').item.json.title, caption: $('Get Video ID').item.json.caption } }];\n} else if (status === 'failed') {\n  throw new Error('Video generation failed');\n} else {\n  return [{ json: { done: false, video_id: videoId, status: status, title: $('Get Video ID').item.json.title, caption: $('Get Video ID').item.json.caption } }];\n}"
+      },
+      "id": "check-status",
+      "name": "Check Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2250, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"}, "conditions": [{"id": "is-done", "leftValue": "={{ $json.done }}", "rightValue": true, "operator": {"type": "boolean", "operation": "equals"}}], "combinator": "and"},
+        "options": {}
+      },
+      "id": "if-done",
+      "name": "Video Ready?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2500, 0]
+    },
+    {
+      "parameters": {"amount": 30},
+      "id": "wait-retry",
+      "name": "Wait Retry",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [2750, 100],
+      "webhookId": "shipflow-wait-retry"
+    },
+    {
+      "parameters": {
+        "url": "=https://api.heygen.com/v1/video_status.get?video_id={{ $json.video_id }}",
+        "sendHeaders": true,
+        "headerParameters": {"parameters": [{"name": "X-Api-Key", "value": "sk_V2_hgu_kcWFcXGWWja_pBX4MbRCxxyS7DHusruaY50fcdSBq8zu"}]},
+        "options": {}
+      },
+      "id": "poll-retry",
+      "name": "Poll Retry",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3000, 100]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://backend.blotato.com/v2/media",
+        "sendHeaders": true,
+        "headerParameters": {"parameters": [{"name": "blotato-api-key", "value": "blt_U6nU0hmqVz7YG8gFd+8xQao3iBn23tv/gDwmbI1RlpI="}, {"name": "Content-Type", "value": "application/json"}]},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"url\": \"{{ $json.video_url }}\"}",
+        "options": {}
+      },
+      "id": "step6-upload",
+      "name": "6. Upload Blotato",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2750, -100]
+    },
+    {
+      "parameters": {
+        "jsCode": "const mediaUrl = $input.first().json.url || $input.first().json.media_url;\nconst platforms = $('Start').item.json.body.platforms || ['tiktok'];\nreturn [{ json: { media_url: mediaUrl, platforms: platforms, title: $('Check Status').item.json.title, caption: $('Check Status').item.json.caption } }];"
+      },
+      "id": "prep-post",
+      "name": "Prep Post",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3000, -100]
+    },
+    {
+      "parameters": {"respondWith": "json", "responseBody": "={{ JSON.stringify({ success: true, message: 'ShipFlow complete!', media_url: $json.media_url, platforms: $json.platforms, title: $json.title, caption: $json.caption }) }}", "options": {}},
+      "id": "respond-final",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [3250, -100]
+    }
+  ],
+  "connections": {
+    "Start": {"main": [[{"node": "1. Research News", "type": "main", "index": 0}]]},
+    "1. Research News": {"main": [[{"node": "2. Select Story", "type": "main", "index": 0}]]},
+    "2. Select Story": {"main": [[{"node": "3. Write Script", "type": "main", "index": 0}]]},
+    "3. Write Script": {"main": [[{"node": "Parse Script", "type": "main", "index": 0}]]},
+    "Parse Script": {"main": [[{"node": "4. Create Video", "type": "main", "index": 0}]]},
+    "4. Create Video": {"main": [[{"node": "Get Video ID", "type": "main", "index": 0}]]},
+    "Get Video ID": {"main": [[{"node": "Wait 30s", "type": "main", "index": 0}]]},
+    "Wait 30s": {"main": [[{"node": "5. Poll Status", "type": "main", "index": 0}]]},
+    "5. Poll Status": {"main": [[{"node": "Check Status", "type": "main", "index": 0}]]},
+    "Check Status": {"main": [[{"node": "Video Ready?", "type": "main", "index": 0}]]},
+    "Video Ready?": {"main": [[{"node": "6. Upload Blotato", "type": "main", "index": 0}], [{"node": "Wait Retry", "type": "main", "index": 0}]]},
+    "Wait Retry": {"main": [[{"node": "Poll Retry", "type": "main", "index": 0}]]},
+    "Poll Retry": {"main": [[{"node": "Check Status", "type": "main", "index": 0}]]},
+    "6. Upload Blotato": {"main": [[{"node": "Prep Post", "type": "main", "index": 0}]]},
+    "Prep Post": {"main": [[{"node": "Respond", "type": "main", "index": 0}]]}
+  },
+  "settings": {"executionOrder": "v1"}
+}
