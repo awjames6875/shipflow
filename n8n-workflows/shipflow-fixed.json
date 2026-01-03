@@ -264,7 +264,7 @@
         "headerParameters": {"parameters": [{"name": "blotato-api-key", "value": "blt_U6nU0hmqVz7YG8gFd+8xQao3iBn23tv/gDwmbI1RlpI="}, {"name": "Content-Type", "value": "application/json"}]},
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ post: { accountId: '23118', content: { text: $json.caption, mediaUrls: [$json.media_url], platform: 'youtube' }, target: { targetType: 'youtube', title: $json.title, containsSyntheticMedia: true } } }) }}",
+        "jsonBody": "={{ JSON.stringify({ post: { accountId: '23118', content: { text: $json.caption, mediaUrls: [$json.media_url], platform: 'youtube' }, target: { targetType: 'youtube', title: $json.title, containsSyntheticMedia: true, privacyStatus: 'public', shouldNotifySubscribers: false } } }) }}",
         "options": {}
       },
       "id": "post-youtube",
@@ -336,7 +336,7 @@
         "headerParameters": {"parameters": [{"name": "blotato-api-key", "value": "blt_U6nU0hmqVz7YG8gFd+8xQao3iBn23tv/gDwmbI1RlpI="}, {"name": "Content-Type", "value": "application/json"}]},
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ post: { accountId: '3713', content: { text: $json.caption, mediaUrls: [$json.media_url], platform: 'pinterest' }, target: { targetType: 'pinterest' } } }) }}",
+        "jsonBody": "={{ JSON.stringify({ post: { accountId: '3713', content: { text: $json.caption, mediaUrls: [$json.media_url], platform: 'pinterest' }, target: { targetType: 'pinterest', boardId: 'YOUR_BOARD_ID' } } }) }}",
         "options": {}
       },
       "id": "post-pinterest",
