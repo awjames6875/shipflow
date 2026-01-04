@@ -112,7 +112,7 @@ class Config:
 class WorkflowInput(BaseModel):
     """Input for manual trigger of the workflow"""
     industry: str = Field(default="real estate", description="Industry to research news for")
-    script_length_seconds: int = Field(default=30, description="Target video length in seconds")
+    script_length_seconds: int = Field(default=15, description="Target video length in seconds")
     platforms: list[str] = Field(
         default=["tiktok", "instagram", "youtube"],
         description="Social platforms to post to"
@@ -165,7 +165,7 @@ async def call_perplexity(prompt: str) -> str:
         return data["choices"][0]["message"]["content"]
 
 
-def call_openai_writer(news_report: str) -> ScriptOutput:
+def call_openai_writer(news_report: str, script_length_seconds: int = 15) -> ScriptOutput:
     """Call OpenAI to write video script, caption, and title"""
     if not Config.OPENAI_API_KEY:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured")
@@ -179,12 +179,11 @@ def call_openai_writer(news_report: str) -> ScriptOutput:
 </news>
 
 2. Write a conversational monologue script for an AI avatar video, following these guidelines:
-   - The script should be approximately 30 seconds when spoken aloud.
-   - Include lots of factual details and statistics from the article.
+   - CRITICAL: The script MUST be EXACTLY 3 sentences and no more than 50 words total.
    - Use 6th grade reading level.
    - Balanced viewpoint.
    - First sentence should create an irresistible curiosity gap to hook viewers.
-   - Replace the last sentence with this CTA: "Hit follow to stay up to date!"
+   - The third sentence MUST be: "Hit follow to stay up to date!"
    - ONLY output the exact video script. Do not output anything else. NEVER include intermediate thoughts, notes, or formatting.
 
 3. Write an SEO-optimized caption that will accompany the video, max 5 hashtags.
@@ -201,7 +200,7 @@ You will output structured JSON in the following format:
 }}"""
 
     response = client.chat.completions.create(
-        model="o1",  # Using OpenAI's o1 model as requested
+        model="gpt-4o",  # Using GPT-4o for reliable JSON output
         messages=[{"role": "user", "content": system_prompt}],
     )
 
@@ -258,9 +257,7 @@ async def create_heygen_video(script: str, title: str, with_background: bool = F
             "type": "text",
             "input_text": script,
             "voice_id": Config.HEYGEN_VOICE_ID,
-            "speed": 1.1,
-            "pitch": 50,
-            "emotion": "Excited"
+            "speed": 1.1
         }
     }
 
@@ -279,12 +276,6 @@ async def create_heygen_video(script: str, title: str, with_background: bool = F
         "video_inputs": [video_input],
         "dimension": {"width": 720, "height": 1280},
         "aspect_ratio": "9:16",
-        "caption": True,
-        "subtitles": {
-            "preset_name": "default",
-            "font_size": 12,
-            "bottom_align": True
-        },
         "title": title
     }
 
@@ -329,8 +320,8 @@ async def get_heygen_video_status(video_id: str) -> VideoStatus:
         )
 
 
-async def wait_for_video(video_id: str, max_attempts: int = 30, delay: int = 20) -> str:
-    """Poll HeyGen until video is ready"""
+async def wait_for_video(video_id: str, max_attempts: int = 60, delay: int = 20) -> str:
+    """Poll HeyGen until video is ready (20 min timeout)"""
     for attempt in range(max_attempts):
         status = await get_heygen_video_status(video_id)
         logger.info(f"Video {video_id} status: {status.status} (attempt {attempt + 1}/{max_attempts})")
@@ -473,7 +464,7 @@ Complete the following tasks, in order:
 
         # Step 3: Write script
         logger.info("Step 3: Writing video script...")
-        script_output = call_openai_writer(news_report)
+        script_output = call_openai_writer(news_report, input_data.script_length_seconds)
         results["steps"]["write_script"] = {
             "status": "completed",
             "script_preview": script_output.script[:100],

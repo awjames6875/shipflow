@@ -174,6 +174,7 @@ See `backend/.env.example` for full list. Essential:
 - HeyGen videos can get stuck in "processing" - this is HeyGen's service, not code
 - If video shows wrong avatar, verify ID via `/heygen/talking-photos` endpoint
 - Blotato requires platform-specific account IDs (see MANUAL_STEPS.md)
+- **Python server .env not loading** (GOTCHA #70) - If config values don't match `.env`, the server was started from wrong directory. Kill it and restart from `backend/` folder
 
 ## Debugging Protocol
 
@@ -187,6 +188,20 @@ Common error categories in GOTCHAS.md:
 - n8n expression syntax (#1-10) - $json vs $('Node').item references
 - HeyGen polling patterns (#21) - async video generation
 - Blotato platform posting (#30-40) - account ID requirements
+- **Python .env not loading (#70)** - server started from wrong directory, config mismatch
+
+### Quick Python Server Debug
+If Python app has wrong config values:
+```bash
+# 1. Check what server is actually using vs .env file
+curl http://localhost:8000/heygen/talking-photos | jq '.current_id'
+# Compare with: grep HEYGEN_TALKING_PHOTO_ID backend/.env
+
+# 2. If mismatch, kill and restart from correct directory
+netstat -ano | findstr 8000  # Find PID
+taskkill /PID <pid> /F       # Kill it
+cd backend && python -m uvicorn app:app --port 8000
+```
 
 ## Universal Coding Rules & Best Practices
 

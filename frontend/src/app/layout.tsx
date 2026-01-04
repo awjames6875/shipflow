@@ -1,12 +1,22 @@
 import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
+import { Playfair_Display, DM_Sans } from 'next/font/google';
 import './globals.css';
 
-const inter = Inter({ subsets: ['latin'] });
+const playfair = Playfair_Display({
+  subsets: ['latin'],
+  variable: '--font-playfair',
+  display: 'swap',
+});
+
+const dmSans = DM_Sans({
+  subsets: ['latin'],
+  variable: '--font-dm-sans',
+  display: 'swap',
+});
 
 export const metadata: Metadata = {
-  title: 'Viral News to AI Avatar | ShipFlow',
-  description: 'Automatically create AI avatar videos from trending news and post to all social platforms',
+  title: 'ShipFlow | AI-Powered Viral Video Creation',
+  description: 'Transform trending news into captivating AI avatar videos. Post to 9 platforms instantly.',
   keywords: ['AI avatar', 'viral news', 'social media automation', 'HeyGen', 'content creation'],
 };
 
@@ -16,8 +26,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <body className={inter.className}>{children}</body>
+    <html lang="en" className={`${playfair.variable} ${dmSans.variable}`}>
+      <body className="font-sans antialiased">{children}</body>
     </html>
   );
 }

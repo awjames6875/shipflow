@@ -1336,6 +1336,51 @@ Before importing ANY workflow, verify:
 
 ---
 
+# PYTHON BACKEND GOTCHAS
+
+## 70. Python Server Wrong Working Directory / .env Not Loading
+**Problem:** Python uvicorn server started from wrong directory doesn't load `.env` file correctly
+**Symptoms:**
+- Server runs but uses wrong/old environment variable values
+- Validation shows "Avatar ID Format" instead of "Talking Photo ID Format" (wrong avatar type)
+- `/heygen/talking-photos` endpoint shows different `current_id` than what's in `.env`
+- API calls fail even though `.env` has correct keys
+
+**Detection:**
+1. Check `/config` endpoint - compare with actual `.env` values
+2. Check `/validate` endpoint - look for "Talking Photo" vs "Avatar" in check names
+3. Config values don't match what's in the `.env` file
+
+**Root Cause:**
+- Server was started from wrong directory (Docker, VS Code terminal, background process)
+- `load_dotenv()` loads from current working directory, not app directory
+- Old server process still running with cached environment
+
+**Fix:**
+```bash
+# 1. Find and kill the running server
+netstat -ano | findstr 8000  # Get PID
+taskkill /PID <pid> /F       # Kill it
+
+# 2. Start server from CORRECT directory
+cd c:\Projects\shipflow-app\backend
+python -m uvicorn app:app --host 0.0.0.0 --port 8000
+
+# Or via PowerShell (handles Windows paths better)
+powershell -Command "Set-Location 'c:\Projects\shipflow-app\backend'; python -m uvicorn app:app --host 0.0.0.0 --port 8000"
+```
+
+**Verification:**
+```bash
+# After restart, verify correct values loaded
+curl http://localhost:8000/heygen/talking-photos | jq '.current_id'
+# Should match HEYGEN_TALKING_PHOTO_ID in .env
+```
+
+**Auto-Fix Rule:** Compare `/config` response with `.env` file → Flag mismatch
+
+---
+
 ## ADD YOUR GOTCHAS BELOW:
 
 <!-- When you discover new issues, add them here! -->
