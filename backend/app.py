@@ -58,6 +58,18 @@ from sdk import (
 )
 from sdk.config_validator import validate_config_or_exit
 
+# Brand Builder SDK imports
+from sdk.apify import ApifyClient, ScrapingConfig, ViralHook, get_parenting_hooks, get_daycare_hooks
+from sdk.brand_voice import (
+    SCRIPT_WRITER_SYSTEM_PROMPT,
+    build_script_prompt,
+    build_hook_selector_prompt,
+    get_audience,
+    HOOK_SELECTOR_SYSTEM_PROMPT,
+    AUDIENCE_PARENTS,
+    AUDIENCE_DAYCARE,
+)
+
 # Load environment variables
 load_dotenv()
 
@@ -91,6 +103,9 @@ class Config:
     )
     HEYGEN_HAS_BACKGROUND = os.getenv("HEYGEN_HAS_BACKGROUND", "false").lower() == "true"
 
+    # Enable burned-in video captions/subtitles (adds ~10-30s to processing)
+    HEYGEN_ENABLE_CAPTIONS = os.getenv("HEYGEN_ENABLE_CAPTIONS", "true").lower() == "true"
+
     # Industry to research (customizable)
     INDUSTRY = os.getenv("INDUSTRY", "real estate")
 
@@ -103,6 +118,26 @@ class Config:
     BLOTATO_PINTEREST_ACCOUNT_ID = os.getenv("BLOTATO_PINTEREST_ACCOUNT_ID")
     BLOTATO_TIKTOK_ACCOUNT_ID = os.getenv("BLOTATO_TIKTOK_ACCOUNT_ID")
     BLOTATO_TWITTER_ACCOUNT_ID = os.getenv("BLOTATO_TWITTER_ACCOUNT_ID")
+
+    # ==========================================================================
+    # BRAND BUILDER CONFIGURATION (Safe Harbor)
+    # ==========================================================================
+    APIFY_API_TOKEN = os.getenv("APIFY_API_TOKEN")
+    WORKFLOW_MODE = os.getenv("WORKFLOW_MODE", "brand")  # "news" or "brand"
+    BRAND_NAME = os.getenv("BRAND_NAME", "Safe Harbor Behavioral Health")
+    TARGET_AUDIENCE = os.getenv("TARGET_AUDIENCE", "both")  # "parents", "daycare_owners", "both"
+
+    # TikTok hashtags to scrape (comma-separated)
+    APIFY_TIKTOK_HASHTAGS = os.getenv(
+        "APIFY_TIKTOK_HASHTAGS",
+        "momsoftiktok,parentsoftiktok,toddlermom,bigfeelings,daycaretok"
+    ).split(",")
+
+    # Reddit subreddits to scrape (comma-separated)
+    APIFY_REDDIT_SUBREDDITS = os.getenv(
+        "APIFY_REDDIT_SUBREDDITS",
+        "Parenting,Mommit,daddit,toddlers,ECEProfessionals,ChildCare"
+    ).split(",")
 
 
 # =============================================================================
@@ -136,6 +171,27 @@ class VideoStatus(BaseModel):
     video_id: str
     status: str
     video_url: Optional[str] = None
+
+
+class BrandBuilderInput(BaseModel):
+    """Input for brand builder workflow"""
+    audience: str = Field(default="parents", description="Target audience: parents, daycare_owners, or both")
+    script_length_seconds: int = Field(default=30, description="Target video length in seconds")
+    platforms: list[str] = Field(
+        default=["tiktok", "instagram", "youtube"],
+        description="Social platforms to post to"
+    )
+    num_hooks_to_fetch: int = Field(default=10, description="Number of viral hooks to scrape")
+
+
+class BrandContentOutput(BaseModel):
+    """Output from brand content generation"""
+    selected_hook: str
+    hook_source: str
+    hook_category: str
+    script: str
+    caption: str
+    title: str
 
 
 # =============================================================================
@@ -276,7 +332,8 @@ async def create_heygen_video(script: str, title: str, with_background: bool = F
         "video_inputs": [video_input],
         "dimension": {"width": 720, "height": 1280},
         "aspect_ratio": "9:16",
-        "title": title
+        "title": title,
+        "caption": Config.HEYGEN_ENABLE_CAPTIONS  # Burned-in subtitles
     }
 
     async with httpx.AsyncClient(timeout=60.0) as client:
@@ -313,10 +370,11 @@ async def get_heygen_video_status(video_id: str) -> VideoStatus:
         )
         response.raise_for_status()
         data = response.json()["data"]
+        # Prefer captioned video URL if available
         return VideoStatus(
             video_id=video_id,
             status=data["status"],
-            video_url=data.get("video_url")
+            video_url=data.get("video_url_caption") or data.get("video_url")
         )
 
 
@@ -541,6 +599,258 @@ Complete the following tasks, in order:
 
 
 # =============================================================================
+# BRAND BUILDER WORKFLOW (Safe Harbor)
+# =============================================================================
+
+async def scrape_viral_hooks(num_hooks: int = 10, audience: str = "both") -> list[ViralHook]:
+    """Scrape viral hooks from TikTok and Reddit using Apify."""
+    if not Config.APIFY_API_TOKEN:
+        raise HTTPException(status_code=500, detail="APIFY_API_TOKEN not configured")
+
+    client = ApifyClient(api_token=Config.APIFY_API_TOKEN)
+
+    # Configure scraping based on audience
+    if audience == "daycare_owners":
+        config = ScrapingConfig(
+            tiktok_hashtags=["daycaretok", "preschoolteacher", "ece", "childcarelife", "daycareowner"],
+            reddit_subreddits=["ECEProfessionals", "ChildCare", "daycare", "Teachers"],
+        )
+    elif audience == "parents":
+        config = ScrapingConfig(
+            tiktok_hashtags=Config.APIFY_TIKTOK_HASHTAGS,
+            reddit_subreddits=["Parenting", "Mommit", "daddit", "toddlers", "breakingmom"],
+        )
+    else:  # both
+        config = ScrapingConfig(
+            tiktok_hashtags=Config.APIFY_TIKTOK_HASHTAGS,
+            reddit_subreddits=Config.APIFY_REDDIT_SUBREDDITS,
+        )
+
+    hooks = await client.get_viral_hooks(config=config, top_n=num_hooks)
+    return hooks
+
+
+def select_best_hook(hooks: list[ViralHook], audience: str) -> ViralHook:
+    """Use OpenAI to select the best hook for Safe Harbor to respond to."""
+    if not Config.OPENAI_API_KEY:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured")
+
+    if not hooks:
+        raise HTTPException(status_code=400, detail="No hooks to select from")
+
+    # Get day of week for content calendar
+    day_of_week = datetime.now().strftime("%A")
+
+    client = OpenAI(api_key=Config.OPENAI_API_KEY)
+
+    prompt = build_hook_selector_prompt(hooks, audience, day_of_week)
+
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": HOOK_SELECTOR_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt}
+        ],
+        response_format={"type": "json_object"}
+    )
+
+    content = response.choices[0].message.content
+
+    import json
+    try:
+        data = json.loads(content)
+        selected_index = data.get("selected_index", 1) - 1  # Convert to 0-based
+        if 0 <= selected_index < len(hooks):
+            return hooks[selected_index]
+        return hooks[0]  # Fallback to first hook
+    except (json.JSONDecodeError, KeyError):
+        logger.warning("Failed to parse hook selection, using first hook")
+        return hooks[0]
+
+
+def write_brand_script(hook: ViralHook, audience: str) -> BrandContentOutput:
+    """Write a script in Safe Harbor's voice responding to a viral hook."""
+    if not Config.OPENAI_API_KEY:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured")
+
+    audience_config = AUDIENCE_DAYCARE if audience == "daycare_owners" else AUDIENCE_PARENTS
+    user_prompt = build_script_prompt(
+        hook_text=hook.text,
+        source=hook.source,
+        source_detail=hook.source_detail,
+        audience=audience_config,
+    )
+
+    client = OpenAI(api_key=Config.OPENAI_API_KEY)
+
+    # Get the script
+    script_response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": SCRIPT_WRITER_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt}
+        ],
+    )
+
+    script = script_response.choices[0].message.content.strip()
+
+    # Generate caption and title
+    caption_prompt = f"""Based on this video script, write:
+1. A short, engaging caption (under 200 characters) with 3-5 relevant hashtags
+2. A viral title (under 50 characters, no emojis)
+
+Script:
+{script}
+
+Return JSON: {{"caption": "...", "title": "..."}}"""
+
+    caption_response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": caption_prompt}],
+        response_format={"type": "json_object"}
+    )
+
+    import json
+    try:
+        caption_data = json.loads(caption_response.choices[0].message.content)
+        caption = caption_data.get("caption", f"{script[:100]}... #safeharbor #parenting")
+        title = caption_data.get("title", "Parenting Tip")
+    except json.JSONDecodeError:
+        caption = f"{script[:100]}... #safeharbor #parenting #bodyandbrain"
+        title = "Parenting Wisdom"
+
+    return BrandContentOutput(
+        selected_hook=hook.text,
+        hook_source=hook.source,
+        hook_category=hook.category or "general",
+        script=script,
+        caption=caption,
+        title=title,
+    )
+
+
+async def run_brand_builder_workflow(input_data: BrandBuilderInput) -> dict:
+    """Execute the Safe Harbor brand builder workflow."""
+    results = {
+        "started_at": datetime.now().isoformat(),
+        "workflow_type": "brand_builder",
+        "audience": input_data.audience,
+        "steps": {}
+    }
+
+    try:
+        # Step 1: Scrape viral hooks
+        logger.info(f"Step 1: Scraping viral hooks for {input_data.audience}...")
+        hooks = await scrape_viral_hooks(
+            num_hooks=input_data.num_hooks_to_fetch,
+            audience=input_data.audience
+        )
+        results["steps"]["scrape_hooks"] = {
+            "status": "completed",
+            "hooks_found": len(hooks),
+            "preview": f"Found {len(hooks)} hooks from TikTok & Reddit"
+        }
+
+        if not hooks:
+            raise HTTPException(status_code=500, detail="No viral hooks found")
+
+        # Step 2: Select best hook
+        logger.info("Step 2: Selecting best hook...")
+        selected_hook = select_best_hook(hooks, input_data.audience)
+        results["steps"]["select_hook"] = {
+            "status": "completed",
+            "hook": selected_hook.text,
+            "source": selected_hook.source,
+            "category": selected_hook.category
+        }
+
+        # Step 3: Write script in brand voice
+        logger.info("Step 3: Writing script in Safe Harbor voice...")
+        content = write_brand_script(selected_hook, input_data.audience)
+        results["steps"]["write_script"] = {
+            "status": "completed",
+            "script_preview": content.script[:150],
+            "title": content.title
+        }
+
+        # Step 4: Create HeyGen video
+        logger.info("Step 4: Creating AI avatar video...")
+        video_id = await create_heygen_video(
+            script=content.script,
+            title=content.title,
+            with_background=Config.HEYGEN_HAS_BACKGROUND
+        )
+        results["steps"]["create_video"] = {"status": "processing", "video_id": video_id}
+
+        # Step 5: Wait for video
+        logger.info(f"Step 5: Waiting for video {video_id}...")
+        video_url = await wait_for_video(video_id)
+        results["steps"]["create_video"]["status"] = "completed"
+        results["steps"]["create_video"]["video_url"] = video_url
+
+        # Step 6: Upload to Blotato
+        logger.info("Step 6: Uploading to Blotato...")
+        media_url = await upload_to_blotato(video_url)
+        results["steps"]["upload_media"] = {"status": "completed", "media_url": media_url}
+
+        # Step 7: Post to platforms
+        logger.info("Step 7: Posting to social platforms...")
+        platform_accounts = {
+            "bluesky": Config.BLOTATO_BLUESKY_ACCOUNT_ID,
+            "facebook": Config.BLOTATO_FACEBOOK_ACCOUNT_ID,
+            "youtube": Config.BLOTATO_YOUTUBE_ACCOUNT_ID,
+            "instagram": Config.BLOTATO_INSTAGRAM_ACCOUNT_ID,
+            "pinterest": Config.BLOTATO_PINTEREST_ACCOUNT_ID,
+            "tiktok": Config.BLOTATO_TIKTOK_ACCOUNT_ID,
+            "twitter": Config.BLOTATO_TWITTER_ACCOUNT_ID,
+        }
+
+        post_results = {}
+        for platform in input_data.platforms:
+            account_id = platform_accounts.get(platform)
+            if not account_id:
+                post_results[platform] = {"status": "skipped", "reason": "No account ID configured"}
+                continue
+
+            try:
+                result = await post_to_platform(
+                    platform=platform,
+                    account_id=account_id,
+                    text=content.caption,
+                    media_url=media_url,
+                    title=content.title if platform == "youtube" else None
+                )
+                post_results[platform] = {"status": "completed", "result": result}
+                logger.info(f"Posted to {platform} successfully")
+            except Exception as e:
+                post_results[platform] = {"status": "failed", "error": str(e)}
+                logger.error(f"Failed to post to {platform}: {e}")
+
+        results["steps"]["post_to_platforms"] = {
+            "status": "completed",
+            "platforms": post_results
+        }
+
+        # Include the full content for reference
+        results["content"] = {
+            "hook_used": content.selected_hook,
+            "script": content.script,
+            "caption": content.caption,
+            "title": content.title
+        }
+
+        results["completed_at"] = datetime.now().isoformat()
+        results["status"] = "completed"
+
+    except Exception as e:
+        logger.exception("Brand builder workflow failed")
+        results["status"] = "failed"
+        results["error"] = str(e)
+
+    return results
+
+
+# =============================================================================
 # FASTAPI APP
 # =============================================================================
 
@@ -600,19 +910,7 @@ async def lifespan(app: FastAPI):
 
     logger.info("Viral News to AI Avatar API starting...")
 
-    # ==========================================================================
-    # STEP 1: Validate configuration BEFORE accepting any traffic
-    # This catches wrong IDs, missing fields, and other config errors at startup
-    # ==========================================================================
-    logger.info("Running configuration validation...")
-    try:
-        await validate_config_or_exit()
-    except RuntimeError as e:
-        logger.error(f"Configuration validation failed: {e}")
-        logger.error("Fix the errors above and restart the application.")
-        raise
-
-    # Initialize optimizer
+    # Initialize optimizer (fast, no HTTP calls)
     init_optimizer()
 
     # Set up daily improvement cycle scheduler
@@ -632,6 +930,9 @@ async def lifespan(app: FastAPI):
         logger.warning("APScheduler not installed. Daily improvement cycle disabled.")
         logger.warning("Install with: pip install apscheduler")
 
+    logger.info("Server ready to accept requests")
+
+    # Server is now ready to accept requests
     yield
 
     # Shutdown
@@ -658,12 +959,18 @@ app.add_middleware(
 
 @app.get("/")
 async def root():
-    """Health check endpoint"""
+    """Root endpoint"""
     return {
         "status": "healthy",
         "app": "Viral News to AI Avatar",
         "version": "1.0.0"
     }
+
+
+@app.get("/health")
+async def health_check():
+    """Fast health check for Railway/container orchestration"""
+    return {"status": "ok"}
 
 
 @app.get("/config")
@@ -729,6 +1036,150 @@ async def run_workflow(input_data: WorkflowInput, background_tasks: BackgroundTa
     # For demo purposes, run synchronously
     # In production, use background_tasks or Celery
     result = await run_full_workflow(input_data)
+    return result
+
+
+# =============================================================================
+# BRAND BUILDER ENDPOINTS (Safe Harbor)
+# =============================================================================
+
+@app.get("/config/brand")
+async def get_brand_config():
+    """Check brand builder configuration"""
+    return {
+        "workflow_mode": Config.WORKFLOW_MODE,
+        "brand_name": Config.BRAND_NAME,
+        "target_audience": Config.TARGET_AUDIENCE,
+        "apify_configured": bool(Config.APIFY_API_TOKEN),
+        "tiktok_hashtags": Config.APIFY_TIKTOK_HASHTAGS,
+        "reddit_subreddits": Config.APIFY_REDDIT_SUBREDDITS,
+        "heygen_configured": bool(Config.HEYGEN_API_KEY and (Config.HEYGEN_TALKING_PHOTO_ID or Config.HEYGEN_AVATAR_ID)),
+        "blotato_configured": bool(Config.BLOTATO_API_KEY),
+    }
+
+
+@app.get("/hooks/scrape")
+async def scrape_hooks_preview(
+    num_hooks: int = 10,
+    audience: str = "parents"
+):
+    """
+    Scrape viral hooks without creating a video.
+
+    Use this to preview available hooks before running the full workflow.
+
+    Args:
+        num_hooks: Number of hooks to fetch (default 10)
+        audience: Target audience - "parents", "daycare_owners", or "both"
+
+    Returns:
+        List of viral hooks with text, source, category, and engagement score
+    """
+    if not Config.APIFY_API_TOKEN:
+        raise HTTPException(
+            status_code=500,
+            detail="APIFY_API_TOKEN not configured. Get your token at https://console.apify.com/account/integrations"
+        )
+
+    try:
+        hooks = await scrape_viral_hooks(num_hooks=num_hooks, audience=audience)
+        return {
+            "audience": audience,
+            "hooks_found": len(hooks),
+            "hooks": [
+                {
+                    "text": h.text,
+                    "source": h.source,
+                    "source_detail": h.source_detail,
+                    "category": h.category,
+                    "engagement_score": round(h.engagement_score, 2),
+                    "original_url": h.original_url
+                }
+                for h in hooks
+            ]
+        }
+    except Exception as e:
+        logger.exception("Failed to scrape hooks")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/hooks/select")
+async def select_hook_preview(
+    num_hooks: int = 10,
+    audience: str = "parents"
+):
+    """
+    Scrape hooks AND select the best one (preview only, no video).
+
+    This runs steps 1-3 of the brand builder workflow:
+    1. Scrape viral hooks
+    2. AI selects best hook
+    3. Write script in brand voice
+
+    Returns the selected hook and generated script without creating a video.
+    """
+    if not Config.APIFY_API_TOKEN:
+        raise HTTPException(status_code=500, detail="APIFY_API_TOKEN not configured")
+    if not Config.OPENAI_API_KEY:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured")
+
+    try:
+        # Step 1: Scrape hooks
+        hooks = await scrape_viral_hooks(num_hooks=num_hooks, audience=audience)
+        if not hooks:
+            raise HTTPException(status_code=404, detail="No viral hooks found")
+
+        # Step 2: Select best hook
+        selected_hook = select_best_hook(hooks, audience)
+
+        # Step 3: Write script
+        content = write_brand_script(selected_hook, audience)
+
+        return {
+            "audience": audience,
+            "hooks_scraped": len(hooks),
+            "selected_hook": {
+                "text": selected_hook.text,
+                "source": selected_hook.source,
+                "source_detail": selected_hook.source_detail,
+                "category": selected_hook.category,
+                "engagement_score": round(selected_hook.engagement_score, 2)
+            },
+            "generated_content": {
+                "script": content.script,
+                "caption": content.caption,
+                "title": content.title
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to select hook and write script")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/workflow/run-brand")
+async def run_brand_workflow(input_data: BrandBuilderInput):
+    """
+    Run the Safe Harbor brand builder workflow.
+
+    This is the main endpoint for creating brand-building content:
+    1. Scrape viral hooks from TikTok and Reddit
+    2. AI selects the best hook to respond to
+    3. Write script in Safe Harbor's encouraging voice
+    4. Create AI avatar video via HeyGen
+    5. Post to social platforms via Blotato
+
+    Args:
+        audience: "parents", "daycare_owners", or "both" (default: parents)
+        script_length_seconds: Target video length (default: 30)
+        platforms: List of platforms to post to (default: tiktok, instagram, youtube)
+        num_hooks_to_fetch: How many hooks to scrape (default: 10)
+
+    Returns:
+        Full workflow results including video URL and post results
+    """
+    result = await run_brand_builder_workflow(input_data)
     return result
 
 
